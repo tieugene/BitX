@@ -530,7 +530,7 @@ static void get_data_list(const struct bg_cnf_data *pcd, struct bg_data_node **p
         {
             bg_data_list_get(pdl, ppd, pnodes_n, perr);
 
-            snprintf(temp, 128, "\tПолучены данные для %zu да%s", *pnodes_n, (((*pnodes_n % 10) != 1) ? "т" : "ты"));
+            snprintf(temp, 128, "\tПолучены данные для %zu да%s", *pnodes_n, ((((11 == *pnodes_n) || (*pnodes_n % 10) != 1)) ? "т" : "ты"));
             PUTS_MESSAGE(temp);
         }
         bg_data_list_deinit(&pdl);
@@ -563,7 +563,7 @@ static void * get_data(void *data)
         n = BG_BALANCES_FILENAME_LEN;
     n += 5;         // 5 = 4 ".txt" or ".csv" + 1 '\0'
 
-    for (bg_queue_get(ptd->pqd, &t, NULL); t && !err.err_code; bg_queue_get(ptd->pqd, &t, NULL))
+    for (bg_queue_get(ptd->pqd, &t, NULL); t && !err.err_code; )
     {
         task = (struct task_data *) t;
 
@@ -662,6 +662,10 @@ static void * get_data(void *data)
                             else
                                 bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Получение курса биткоина для даты из D_clean-файла");
                         }
+/**/
+                        else if (!strcmp(err.err_str, "Пустой файл"))
+                            memset(&err, 0, sizeof(struct bb_error));
+/**/
                         else
                             bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Парсинг D_clean-файла");
 
@@ -678,7 +682,7 @@ static void * get_data(void *data)
                     }
                 }
 
-                if (!err.err_code)
+                if (!err.err_code && pmd)
                 {
                     bb_get_chart_data(pmd, &chart, &err);
 
@@ -697,45 +701,48 @@ static void * get_data(void *data)
                         bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Получение данных для файла balances.csv");
 
                     bb_free_chart_data(&chart);
+
+                    if (!err.err_code)
+                    {
+                        bb_get_graph_data(pmd, &node, last_day_rate, &err);
+                        if (err.err_code)
+                            bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Получение целевых показателей");
+                    }
+
+                    if (!err.err_code)
+                    {
+                        bb_free_m_data(&pmd, &err);
+                        if (err.err_code)
+                            bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Освобождение памяти из-под дерева M_clean-файла");
+                    }
+                    else
+                        bb_free_m_data(&pmd, NULL);
+
+                    if (!err.err_code)
+                    {
+                        ttm.tm_year = year + 100;
+                        ttm.tm_mon = month - 1;
+                        ttm.tm_mday = date;
+
+                        node.date = mktime(&ttm) - timezone;
+
+                        node.rate = last_day_rate;
+
+                        bg_data_list_add(ptd->pdl, &node, &err);
+                        if (err.err_code)
+                            bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Добавление целевых показателей в список");
+                    }
                 }
-
-                if (!err.err_code)
-                {
-                    bb_get_graph_data(pmd, &node, last_day_rate, &err);
-                    if (err.err_code)
-                        bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Получение целевых показателей");
-                }
-
-                if (!err.err_code)
-                {
-                    bb_free_m_data(&pmd, &err);
-                    if (err.err_code)
-                        bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Освобождение памяти из-под дерева M_clean-файла");
-                }
-                else
-                    bb_free_m_data(&pmd, NULL);
-
-                if (!err.err_code)
-                {
-                    ttm.tm_year = year + 100;
-                    ttm.tm_mon = month - 1;
-                    ttm.tm_mday = date;
-
-                    node.date = mktime(&ttm) - timezone;
-
-                    node.rate = last_day_rate;
-
-                    bg_data_list_add(ptd->pdl, &node, &err);
-                    if (err.err_code)
-                        bg_ts_error_set_error_data(ptd->ptse, &err, task->path, "Добавление целевых показателей в список");
-                }
-
             }
 
             free(s_path);
         }
 
         free(t);
+        t = NULL;
+
+        if (!err.err_code)
+            bg_queue_get(ptd->pqd, &t, NULL);
     }
 
     return NULL;
